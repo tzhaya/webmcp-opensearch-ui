@@ -3,95 +3,73 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CiNii Research WebMCP対応デモンストレーションページ</title>
+  <title>CiNii Research WebMCP デモ（命令的API + JSON-LD 整備版）</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="page-header">
-    <h1>CiNii Research WebMCP対応デモンストレーションページ</h1>
+    <h1>CiNii Research WebMCP デモ（命令的API + JSON-LD 整備版）</h1>
     <p class="subtitle">
-      このページでは、CiNii ReearchのOpenSearch v2 APIを使用して検索を行うほか、<a href="https://github.com/webmachinelearning/webmcp" target="_blank" rel="noopener">WebMCP</a>
-      対応ブラウザでは AI エージェントから同じフォームを <code>searchPaper</code> ツールとして呼び出せます。
+      このページはフォーム要素に WebMCP の宣言的属性（<code>toolname</code> / <code>toolparamdescription</code>）を
+      <strong>一切付けず</strong>、命令的 API <code>navigator.modelContext.registerTool()</code> 一本で
+      <code>searchPaper</code> ツールを登録します。さらに CiNii の <code>format=json</code> レスポンスを
+      <a href="https://json-ld.org/" target="_blank" rel="noopener">JSON-LD</a> として解釈し、
+      著者・件名・同定子（DOI/URI）・刊行物メタ等の<strong>セマンティック情報を保持したまま</strong> AI に返します。
     </p>
     <p id="mcp-status" class="mcp-status" data-supported="false">WebMCP: 検出中…</p>
+    <p class="nav-link"><a href="index.html">← 通常版デモ（宣言的API + 命令的API 併用）に戻る</a></p>
   </header>
 
   <main>
-    <form
-      id="searchForm"
-      toolname="searchPaper"
-      tooldescription="CiNii Research OpenSearch v2 APIで論文・書籍・研究データ等を で検索する。複数の条件を AND で組み合わせ可能。"
-    >
-      <fieldset class="sources-fieldset"
-        toolparamdescription="検索対象ソース。'cinii' / 'jairo' のいずれか / 両方を選択。デフォルトは cinii のみ。">
-        <legend>検索対象ソース</legend>
-        <label>
-          <input type="checkbox" name="source" value="cinii" checked />
-          <span>CiNii Research</span>
-        </label>
-        <label>
-          <input type="checkbox" name="source" value="jairo" />
-          <span>JAIRO Cloud</span>
-        </label>
-      </fieldset>
-
+    <form id="searchForm">
       <div class="form-grid">
         <label class="field">
           <span class="field-label">フリーワード</span>
-          <input type="text" name="q"
-            toolparamdescription="フリーワード（タイトル・本文・著者などを横断検索する文字列）。複数語はスペース区切りで AND。" />
+          <input type="text" name="q" />
         </label>
 
         <label class="field">
           <span class="field-label">タイトル</span>
-          <input type="text" name="title"
-            toolparamdescription="タイトルに含まれる語。複数指定時は AND。" />
+          <input type="text" name="title" />
         </label>
 
         <label class="field">
           <span class="field-label">刊行物名</span>
-          <input type="text" name="publicationTitle"
-            toolparamdescription="刊行物（雑誌名・書籍名）に含まれる語。" />
+          <input type="text" name="publicationTitle" />
         </label>
 
         <label class="field">
           <span class="field-label">人物名</span>
-          <input type="text" name="name"
-            toolparamdescription="著者・編者などの人物名。姓名どちらでも可。" />
+          <input type="text" name="name" />
         </label>
 
         <label class="field">
           <span class="field-label">所属機関</span>
-          <input type="text" name="affiliation"
-            toolparamdescription="著者の所属機関名。" />
+          <input type="text" name="affiliation" />
         </label>
 
         <label class="field">
           <span class="field-label">注記・抄録</span>
-          <input type="text" name="description"
-            toolparamdescription="注記・抄録（abstract）に含まれる語。" />
+          <input type="text" name="description" />
         </label>
 
         <label class="field">
           <span class="field-label">出版年（開始）</span>
           <input type="text" name="productYearFrom"
             placeholder="YYYY または YYYYMM"
-            inputmode="numeric"
-            toolparamdescription="出版年（開始）。YYYY または YYYYMM 形式。例: 2020, 202004" />
+            inputmode="numeric" />
         </label>
 
         <label class="field">
           <span class="field-label">出版年（終了）</span>
           <input type="text" name="productYearUntil"
             placeholder="YYYY または YYYYMM"
-            inputmode="numeric"
-            toolparamdescription="出版年（終了）。YYYY または YYYYMM 形式。" />
+            inputmode="numeric" />
         </label>
 
         <label class="field">
           <span class="field-label">本文有無</span>
-          <select name="hasLinkToFullText"
-            toolparamdescription="本文へのリンクで絞る。'true'=本文ありのみ、'false'=本文なしのみ、空='指定なし'。">
+          <select name="hasLinkToFullText">
             <option value="">指定なし</option>
             <option value="true">本文ありのみ</option>
             <option value="false">本文なしのみ</option>
@@ -102,8 +80,7 @@
           <span class="field-label">言語種別</span>
           <input type="text" name="languageType"
             list="languageTypeOptions"
-            placeholder="ja, en, zh など (ISO-639-1)"
-            toolparamdescription="資料の言語種別。ISO-639-1 コード（ja=日本語, en=英語, zh=中国語, ko=韓国語, fr=仏語, de=独語, es=西語 等）。複数指定はカンマ区切りで OR。例: 'ja,en'。researchers 検索では非対応。" />
+            placeholder="ja, en, zh など (ISO-639-1)" />
           <datalist id="languageTypeOptions">
             <option value="ja">日本語</option>
             <option value="en">英語</option>
@@ -118,8 +95,7 @@
 
         <label class="field">
           <span class="field-label">CiNii 検索種別</span>
-          <select name="resourceType"
-            toolparamdescription="CiNii Research の検索種別。all=横断, articles=論文, books=書籍, data=研究データ, dissertations=博士論文, projects=研究プロジェクト, researchers=研究者, projectsAndProducts=プロジェクトと成果物。">
+          <select name="resourceType">
             <option value="all" selected>すべて (all)</option>
             <option value="articles">論文 (articles)</option>
             <option value="books">書籍 (books)</option>
@@ -133,8 +109,7 @@
 
         <label class="field">
           <span class="field-label">ソート</span>
-          <select name="sortorder"
-            toolparamdescription="ソート順。0=新しい順, 1=古い順, 4=関連度（既定）, 5=五十音順。">
+          <select name="sortorder">
             <option value="4" selected>関連度</option>
             <option value="0">新しい順</option>
             <option value="1">古い順</option>
@@ -144,14 +119,12 @@
 
         <label class="field">
           <span class="field-label">1ページの件数</span>
-          <input type="number" name="count" min="1" max="200" value="20"
-            toolparamdescription="1ページあたりの件数。1〜200。" />
+          <input type="number" name="count" min="1" max="200" value="20" />
         </label>
 
         <label class="field">
           <span class="field-label">開始位置</span>
-          <input type="number" name="start" min="1" max="10000" value="1"
-            toolparamdescription="開始位置（1始まり）。1〜10000。" />
+          <input type="number" name="start" min="1" max="10000" value="1" />
         </label>
       </div>
 
@@ -162,15 +135,23 @@
     </form>
 
     <div id="status" class="status" data-kind=""></div>
+
+    <details id="debugPane" class="debug-pane" open>
+      <summary>AI 連携デバッグ（最後の <code>searchPaper</code> 呼び出し）</summary>
+      <div class="debug-body">
+        <h3>受信した args</h3>
+        <pre id="debugArgs">（まだ呼び出されていません）</pre>
+        <h3>AI に返した戻り値（先頭 3 件 + @context）</h3>
+        <pre id="debugReturn">（まだ呼び出されていません）</pre>
+      </div>
+    </details>
+
     <div id="resultsHeader"></div>
     <div id="results"></div>
     <nav id="pagination" class="pagination" aria-label="ページ"></nav>
   </main>
 
   <footer class="page-footer">
-    <p class="alt-page-link">
-      <a href="imperative.html">命令的API + JSON-LD セマンティック整備版デモを見る →</a>
-    </p>
     <details class="appid-config">
       <summary>CiNii の appid を設定する（任意・端末内に保存）</summary>
       <p>
@@ -190,6 +171,6 @@
     </p>
   </footer>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="imperative.js"></script>
 </body>
 </html>

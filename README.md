@@ -44,17 +44,64 @@
 - WebMCP 宣言的 API（フォーム属性）と命令的 API（`navigator.modelContext.registerTool`、旧仕様の `provideContext` にもフォールバック対応）の両方に対応
 - JAIRO Cloud 用のアダプタ枠を用意（メンテナンス復旧後に有効化予定）
 
+### 命令的API + JSON-LD セマンティック整備版デモ（`imperative.html`）
+
+通常版（`index.html`）と並行して、もう一つのデモページを用意しています。
+
+- **URL**: `http://localhost:8000/imperative.html`（通常版フッタからもリンク）
+- **特徴**:
+  - フォーム要素に WebMCP の宣言的属性（`toolname` / `toolparamdescription`）を **一切付けず**、
+    命令的 API `navigator.modelContext.registerTool()` 一本で `searchPaper` を登録
+  - CiNii の `format=json` レスポンスを JSON-LD として解釈し、AI への戻り値に
+    `@context` / 著者 / 件名 / 同定子（DOI/URI）/ 刊行物メタ等の **セマンティック情報を保持**
+  - ページ上部に「最後に AI から呼ばれた `searchPaper` の args と戻り値先頭」を表示する
+    デバッグペインを内蔵
+- **使用ファイル**: `imperative.html` / `imperative.js` / `sources/cinii-jsonld.js`
+- **AI 戻り値の構造例**（抜粋）:
+
+  ```jsonc
+  {
+    "@context": { "dc": "...", "prism": "...", "cir": "...", /* ... */ },
+    "source": "cinii",
+    "resourceType": "all",
+    "query": { "q": "都市計画", "count": "20" },
+    "total": 110265,
+    "items": [
+      {
+        "id": "https://cir.nii.ac.jp/crid/...",
+        "resourceType": "Article",         // dc:type
+        "title": "...",
+        "creators": [{ "name": "...", "uri": null }],
+        "publication": { "name": "...", "volume": "...", "date": "1985-03" },
+        "subjects": [{ "label": "都市計画図", "uri": null }],
+        "identifiers": [
+          { "type": "DOI", "value": "10.24484/..." },
+          { "type": "URI", "value": "https://..." }
+        ],
+        "hasFullText": false,
+        "link": "https://cir.nii.ac.jp/crid/..."
+      }
+    ]
+  }
+  ```
+
+  AI は `creators[].uri` / `subjects` / `identifiers` を直接判別でき、続く対話で
+  「同じ著者の他論文」「この件名で絞り込み」「DOI から直接参照」等の判断に使えます。
+
 ## ディレクトリ構成
 
 ```
 webmcp-opensearch-ui/
-├── index.html        # フォーム + 結果領域 (WebMCP 宣言的属性付き)
-├── app.js            # フォーム制御、ディスパッチ、レンダリング、WebMCP 命令的 API 登録
+├── index.html            # 通常版: フォーム + 結果領域 (WebMCP 宣言的属性付き)
+├── app.js                # 通常版: フォーム制御、ディスパッチ、レンダリング、WebMCP 命令的 API 登録
+├── imperative.html       # 命令的API + JSON-LD 整備版: フォーム + デバッグペイン
+├── imperative.js         # 命令的API + JSON-LD 整備版: registerTool 一本、AI 戻り値を JSON-LD で整備
 ├── sources/
-│   ├── cinii.js      # CiNii Research アダプタ（実装）
-│   └── jairo.js      # JAIRO Cloud アダプタ（スタブ、available: false）
+│   ├── cinii.js          # CiNii Research アダプタ（表示用フラット構造を返す）
+│   ├── cinii-jsonld.js   # CiNii Research アダプタ（AI 向け JSON-LD セマンティック整備版）
+│   └── jairo.js          # JAIRO Cloud アダプタ（スタブ、available: false）
 ├── styles.css
-├── .nojekyll         # GitHub Pages 用
+├── .nojekyll             # GitHub Pages 用
 └── README.md
 ```
 

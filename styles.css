@@ -318,3 +318,60 @@ button.primary:hover:not(:disabled) {
 .footer-meta {
   margin: 8px 0 0;
 }
+.alt-page-link {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: var(--bg-soft);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  font-size: 0.92rem;
+}
+.alt-page-link a { font-weight: 600; }
+
+/* ---------- ページ間ナビ（imperative.html） ---------- */
+.nav-link {
+  margin: 8px 0 0;
+  font-size: 0.88rem;
+}
+
+/* ---------- デバッグペイン（imperative.html） ---------- */
+.debug-pane {
+  margin: 12px 0 16px;
+  padding: 8px 12px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--warn);
+  border-radius: var(--radius);
+}
+.debug-pane > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--fg-muted);
+}
+.debug-body h3 {
+  font-size: 0.88rem;
+  margin: 10px 0 4px;
+  color: var(--fg-muted);
+}
+.debug-body pre {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-x: auto;
+  max-height: 320px;
+  margin: 0;
+}
+
+/* ---------- 結果カードの追加メタ（imperative.html） ---------- */
+.result-subjects,
+.result-identifiers {
+  margin-top: 3px;
+  font-size: 0.82rem;
+  color: var(--fg-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
