@@ -6,6 +6,7 @@
 ## 動作環境
 
 - Google Chrome (Windows) バージョン 148.0.7778.97（公式ビルド） （64 ビット）
+  - WebMCP の有効化が必要です。これは開発中の機能です。設定変更は自己責任でお願いします。
 - Claude for Chrome
 
 ## 実行方法
@@ -18,7 +19,16 @@
 2. アドレスバーに `chrome://flags/#enable-webmcp-testing` を入力します（フラグ名: **WebMCP for testing**）。
 3. `Enabled` に変更し、`Relaunch` ボタンで **必ず Chrome を再起動してください**。
 
-### ローカル環境での実行
+### 実行
+
+- 宣言的APIのテスト（フォーム属性でツール登録）
+  - https://tzhaya.github.io/webmcp-opensearch-ui/index.html
+- 命令的APIのテスト（registerTool() のみ・JSON-LD でAI戻り値を整備）
+  - https://tzhaya.github.io/webmcp-opensearch-ui/imperative.html
+  - 検索結果中の情報を利用して結果の絞り込みができます。
+    - 例：「DOIがある論文を抜き出してください」「件名に コムギ がある論文は何件？」
+
+## ローカル環境での実行
 
 1. Web サーバをご用意ください。ES Modules を使用しているため、`file://` ではなく HTTP サーバ経由で開く必要があります。
 
