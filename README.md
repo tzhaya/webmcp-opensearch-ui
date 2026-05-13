@@ -29,7 +29,7 @@
     - 例：「DOIがある論文を抜き出してください」「件名に コムギ がある論文は何件？」
   - 統制語彙による検索語の自動展開 (`suggestSearchTerms` ツール) も提供しています。
     - 例：「イネの病害虫に関する論文を探して」と依頼すると、ヒット数が少ない場合に AI が
-      NDLSH / AGROVOC で「飼料イネ」「稲」「rice」「Oryza sativa」「벼」等へ展開して再検索します。
+      NDLSH / AGROVOC で「飼料イネ」「稲」「rice」「Oryza sativa」「벼」等、自動的に関連するキーワードを加えて再検索します。
 - 統制語彙サジェストの検証ページ（SPARQL の素の挙動確認）
   - https://tzhaya.github.io/webmcp-opensearch-ui/vocab.html
 
@@ -106,11 +106,9 @@
 ### 統制語彙による検索語の自動展開（`suggestSearchTerms` ツール）
 
 農業・生命科学などの分野では「稲 / イネ / 水稲 / rice / *Oryza sativa*」のように同じ
-概念に複数の表記が存在し、ユーザーが入力した語をそのまま投げても再現性のある検索に
-ならないことがあります。命令的API版では、これを SKOS 統制語彙で吸収するための
-`suggestSearchTerms` ツールを追加で登録しています。
+概念に複数の表記が存在し、ユーザーが入力した語でそのまま検索しても、うまくヒットしないことがあります。命令的API版では、これを 統制語彙で吸収するための `suggestSearchTerms` ツール備えています。
 
-- **参照する統制語彙（SKOS / SKOS-XL）**
+- **参照する統制語彙 **
   - [Web NDL Authorities](https://id.ndl.go.jp/information/sparql-11/)（NDLSH 件名標目）
     - エンドポイント: `https://id.ndl.go.jp/auth/ndla/sparql`
     - 件名の別名 (`skos-xl:altLabel`)・上下位語 (`skos:broader/narrower`)・関連語 (`skos:related`) に強い
@@ -118,11 +116,11 @@
     - エンドポイント: `https://agrovoc.fao.org/sparql`
     - 多言語ラベル（ja / en / la / ko / zh ...）・学名・NAL Thesaurus への `skos:exactMatch` に強い
 
-- **動作原理 — 自動チェーンではなく AI 主導**
+- **動作原理 — AIエージェントが要否を判断して統制語彙を使用 **
   - `searchPaper` の戻り値に、ヒット数が少ない場合のみ `expansionHint` を埋め込みます。
-  - 自動的に `searchPaper` を再実行はしません。AI が自然言語の文脈から「これは表記ゆれだ」
-    と判断したときに `suggestSearchTerms` を呼び、展開後の検索語で再度 `searchPaper` を呼び直す
-    `エージェントによる司書的なツール連鎖` を意図しています。
+  - 自動的に語彙を増やして `searchPaper` を実行しません。AI が自然言語の文脈から「これは表記ゆれだ」
+    と判断したときに `suggestSearchTerms` を呼び、展開後の検索語で再度 `searchPaper` で検索を実行します。
+  - `AIエージェントによる司書的な検索支援` を意図しています。
 
 - **AI 戻り値の例**（`term: "イネ"` 呼び出し時、抜粋）
 
