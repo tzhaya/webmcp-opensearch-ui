@@ -27,6 +27,11 @@
   - https://tzhaya.github.io/webmcp-opensearch-ui/imperative.html
   - 検索結果中の情報を利用して結果の絞り込みができます。
     - 例：「DOIがある論文を抜き出してください」「件名に コムギ がある論文は何件？」
+  - 統制語彙による検索語の自動展開 (`suggestSearchTerms` ツール) も提供しています。
+    - 例：「イネの病害虫に関する論文を探して」と依頼すると、ヒット数が少ない場合に AI が
+      NDLSH / AGROVOC で「飼料イネ」「稲」「rice」「Oryza sativa」「벼」等へ展開して再検索します。
+- 統制語彙サジェストの検証ページ（SPARQL の素の挙動確認）
+  - https://tzhaya.github.io/webmcp-opensearch-ui/vocab.html
 
 ## ローカル環境での実行
 
@@ -98,6 +103,56 @@
   AI は `creators[].uri` / `subjects` / `identifiers` を直接判別でき、続く対話で
   「同じ著者の他論文」「この件名で絞り込み」「DOI から直接参照」等の判断に使えます。
 
+### 統制語彙による検索語の自動展開（`suggestSearchTerms` ツール）
+
+農業・生命科学などの分野では「稲 / イネ / 水稲 / rice / *Oryza sativa*」のように同じ
+概念に複数の表記が存在し、ユーザーが入力した語をそのまま投げても再現性のある検索に
+ならないことがあります。命令的API版では、これを SKOS 統制語彙で吸収するための
+`suggestSearchTerms` ツールを追加で登録しています。
+
+- **参照する統制語彙（SKOS / SKOS-XL）**
+  - [Web NDL Authorities](https://id.ndl.go.jp/information/sparql-11/)（NDLSH 件名標目）
+    - エンドポイント: `https://id.ndl.go.jp/auth/ndla/sparql`
+    - 件名の別名 (`skos-xl:altLabel`)・上下位語 (`skos:broader/narrower`)・関連語 (`skos:related`) に強い
+  - [AGROVOC](https://agrovoc.fao.org/browse/agrovoc/en/)（FAO の多言語農業シソーラス）
+    - エンドポイント: `https://agrovoc.fao.org/sparql`
+    - 多言語ラベル（ja / en / la / ko / zh ...）・学名・NAL Thesaurus への `skos:exactMatch` に強い
+
+- **動作原理 — 自動チェーンではなく AI 主導**
+  - `searchPaper` の戻り値に、ヒット数が少ない場合のみ `expansionHint` を埋め込みます。
+  - 自動的に `searchPaper` を再実行はしません。AI が自然言語の文脈から「これは表記ゆれだ」
+    と判断したときに `suggestSearchTerms` を呼び、展開後の検索語で再度 `searchPaper` を呼び直す
+    `エージェントによる司書的なツール連鎖` を意図しています。
+
+- **AI 戻り値の例**（`term: "イネ"` 呼び出し時、抜粋）
+
+  ```jsonc
+  {
+    "@context": { "skos": "...", "skosxl": "...", "ndla": "...", "agrovoc": "..." },
+    "source": "vocab-suggest",
+    "inputTerm": "イネ",
+    "vocabularies": ["ndla", "agrovoc"],
+    "expandedTerms": [
+      "イネ科", "禾本科", "稲科", "Grasses",
+      "飼料イネ", "飼料用イネ",
+      "Oryza sativa", "벼", "稻", "Oryza indica", "Oryza japonica"
+      /* ... 計 ~50 件 */
+    ],
+    "byVocabulary": {
+      "ndla":    { "ok": true, "total": 10, "concepts": [/* prefLabel/altLabel/broader/narrower/related */] },
+      "agrovoc": { "ok": true, "total": 1,  "concepts": [/* 多言語 prefLabel + 学名 + exactMatch */] }
+    }
+  }
+  ```
+
+- **既定の参照語彙の切り替え**
+  - フッタの「**統制語彙（NDLSH / AGROVOC）の既定参照先を設定する**」から個別に有効/無効を切替
+  - `localStorage` キー: `vocab.ndla.enabled` / `vocab.agrovoc.enabled`（どちらも既定 `true`）
+  - AI 側で個別に指定したい場合は `suggestSearchTerms({ term, vocabularies: ['ndla'] })` のように明示
+
+- **動作確認用ページ**（WebMCP 非対応でも動作）
+  - [vocab.html](vocab.html) を開いて任意の語で SPARQL を直接実行・結果と SPARQL クエリ本体を確認できます。
+
 ## ディレクトリ構成
 
 ```
@@ -106,10 +161,15 @@ webmcp-opensearch-ui/
 ├── app.js                # 通常版: フォーム制御、ディスパッチ、レンダリング、WebMCP 命令的 API 登録
 ├── imperative.html       # 命令的API + JSON-LD 整備版: フォーム + デバッグペイン
 ├── imperative.js         # 命令的API + JSON-LD 整備版: registerTool 一本、AI 戻り値を JSON-LD で整備
+├── vocab.html            # 統制語彙サジェスト検証ページ（SPARQL の直接実行）
+├── vocab.js              # vocab.html のロジック（NDLSH / AGROVOC アダプタを呼び出すだけ）
 ├── sources/
 │   ├── cinii.js          # CiNii Research アダプタ（表示用フラット構造を返す）
 │   ├── cinii-jsonld.js   # CiNii Research アダプタ（AI 向け JSON-LD セマンティック整備版）
-│   └── jairo.js          # JAIRO Cloud アダプタ（スタブ、available: false）
+│   ├── jairo.js          # JAIRO Cloud アダプタ（スタブ、available: false）
+│   ├── sparql-utils.js   # SPARQL 共通ユーティリティ（fetch / bindings 整形 / 多言語ラベル選択）
+│   ├── ndla-sparql.js    # Web NDL Authorities (NDLSH) SPARQL アダプタ（SKOS-XL 対応）
+│   └── agrovoc-sparql.js # AGROVOC (FAO 多言語農業シソーラス) SPARQL アダプタ
 ├── styles.css
 ├── .nojekyll             # GitHub Pages 用
 └── README.md

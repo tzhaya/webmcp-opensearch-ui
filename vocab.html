@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>統制語彙サジェスト 検証ページ (NDL Authorities + AGROVOC)</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="page-header">
+    <h1>統制語彙サジェスト 検証ページ</h1>
+    <p class="subtitle">
+      <a href="https://id.ndl.go.jp/information/sparql-11/" target="_blank" rel="noopener">Web NDL Authorities</a>
+      の NDLSH 件名標目と、
+      <a href="https://agrovoc.fao.org/browse/agrovoc/en/" target="_blank" rel="noopener">AGROVOC</a>
+      多言語シソーラスに対して SPARQL を直接投げ、表記ゆれ・上下位語・関連語・他言語ラベルを
+      ブラウザから確認するためのページです。WebMCP ツール化 (<a href="imperative.html">imperative.html</a>) の前段検証として用意しています。
+    </p>
+    <p class="nav-link"><a href="imperative.html">← 命令的版デモに戻る</a> / <a href="index.html">宣言的版デモへ</a></p>
+  </header>
+
+  <main>
+    <form id="vocabForm">
+      <div class="form-grid">
+        <label class="field">
+          <span class="field-label">検索語（日本語・英語・学名など）</span>
+          <input type="text" name="term" id="termInput" placeholder="例: イネ / 稲 / rice / Oryza sativa" required />
+        </label>
+
+        <label class="field">
+          <span class="field-label">候補上位件数（1〜50）</span>
+          <input type="number" name="limit" id="limitInput" min="1" max="50" value="10" />
+        </label>
+      </div>
+
+      <fieldset class="sources-fieldset">
+        <legend>参照する語彙</legend>
+        <label><input type="checkbox" id="useNdla" checked /> Web NDL Authorities (NDLSH)</label>
+        <label><input type="checkbox" id="useAgrovoc" checked /> AGROVOC</label>
+      </fieldset>
+
+      <div class="form-actions">
+        <button type="submit" class="primary">検索</button>
+        <button type="button" id="clearBtn">クリア</button>
+      </div>
+    </form>
+
+    <div id="status" class="status" data-kind=""></div>
+
+    <div id="results"></div>
+
+    <details class="debug-pane" id="debugPane">
+      <summary>送信した SPARQL クエリ（デバッグ）</summary>
+      <div class="debug-body">
+        <pre id="debugSparql">（まだ検索していません）</pre>
+      </div>
+    </details>
+  </main>
+
+  <footer class="page-footer">
+    <p class="footer-meta">
+      Vocab 検証ページ / Takanori Hayashi /
+      <a href="https://github.com/tzhaya/webmcp-opensearch-ui" target="_blank" rel="noopener">Source Code on GitHub</a>
+    </p>
+  </footer>
+
+  <script type="module" src="vocab.js"></script>
+</body>
+</html>

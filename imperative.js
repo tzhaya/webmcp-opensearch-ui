@@ -9,6 +9,9 @@
 // 既存の app.js とは独立した実装で、index.html / app.js には影響しない。
 
 import { ciniiJsonldAdapter, JSONLD_CONTEXT } from './sources/cinii-jsonld.js';
+import { ndlaAdapter } from './sources/ndla-sparql.js';
+import { agrovocAdapter } from './sources/agrovoc-sparql.js';
+import { collectAllTerms } from './sources/sparql-utils.js';
 
 const LOGICAL_FIELDS = [
   'q', 'title', 'publicationTitle', 'name', 'affiliation', 'description',
@@ -18,6 +21,38 @@ const LOGICAL_FIELDS = [
 ];
 
 const TOOL_NAME = 'searchPaper';
+const VOCAB_TOOL_NAME = 'suggestSearchTerms';
+
+// expansionHint を出すしきい値（件数）。
+// この件数未満のヒットだった場合、searchPaper の戻り値に
+// 「statutory vocab に展開すれば取りこぼしを減らせる」というヒントを埋め込む。
+const EXPANSION_HINT_THRESHOLD = 10;
+
+// 語彙設定の localStorage キー。imperative.html フッタの UI と連動。
+const VOCAB_PREF_KEYS = {
+  ndla: 'vocab.ndla.enabled',
+  agrovoc: 'vocab.agrovoc.enabled',
+};
+
+function getVocabPref(vocab) {
+  try {
+    const v = localStorage.getItem(VOCAB_PREF_KEYS[vocab]);
+    if (v === null) return true; // 既定 true
+    return v === '1' || v === 'true';
+  } catch { return true; }
+}
+
+function setVocabPref(vocab, enabled) {
+  try { localStorage.setItem(VOCAB_PREF_KEYS[vocab], enabled ? '1' : '0'); }
+  catch { /* localStorage 不可 */ }
+}
+
+function getDefaultVocabularies() {
+  const out = [];
+  if (getVocabPref('ndla')) out.push('ndla');
+  if (getVocabPref('agrovoc')) out.push('agrovoc');
+  return out;
+}
 
 let currentAbort = null;
 
@@ -310,6 +345,30 @@ function stripRaw(item) {
   return rest;
 }
 
+// 件数が少ない検索結果に対して、AI が「統制語彙で展開すれば取りこぼしを減らせる」と
+// 判断できるよう、ヒント情報を埋め込む。
+// 自動チェーンはしない — 拡張の要否判断は AI 側に委ねる方針（issue #2 の合意設計）。
+function buildExpansionHint(total, params) {
+  if (typeof total !== 'number') return null;
+  if (total >= EXPANSION_HINT_THRESHOLD) return null;
+  // どの語句に対する展開かを示すため、ユーザーが入力した代表的な語を抽出
+  const candidateTerms = ['q', 'title', 'description', 'publicationTitle']
+    .map((k) => params[k]).filter(Boolean);
+  if (candidateTerms.length === 0) return null;
+  return {
+    suggested: true,
+    reason: 'low-result-count',
+    threshold: EXPANSION_HINT_THRESHOLD,
+    currentCount: total,
+    candidateTerms,
+    suggestion:
+      `ヒット数が ${total} 件と少ないため、${VOCAB_TOOL_NAME} ツールに ` +
+      `代表的な検索語（例: ${candidateTerms.slice(0, 2).map((t) => `"${t}"`).join(', ')}）を渡して ` +
+      `NDLSH / AGROVOC で別名・上下位語・多言語ラベル・学名に展開し、再度 ${TOOL_NAME} を呼び出すと取りこぼしを減らせる可能性があります。`,
+    vocabularies: getDefaultVocabularies(),
+  };
+}
+
 function summarizeForAgent(result, params) {
   if (!result.ok) {
     return {
@@ -320,6 +379,7 @@ function summarizeForAgent(result, params) {
       params,
     };
   }
+  const hint = buildExpansionHint(result.total, params);
   return {
     '@context': JSONLD_CONTEXT,
     source: 'cinii',
@@ -329,6 +389,7 @@ function summarizeForAgent(result, params) {
     start: result.start,
     perPage: result.perPage,
     items: (result.items || []).map(stripRaw),
+    ...(hint ? { expansionHint: hint } : {}),
   };
 }
 
@@ -423,14 +484,154 @@ function buildTool() {
   };
 }
 
-function registerWebMCPTool() {
-  const reg = getRegistrationApi();
-  if (!reg) return;
+// ---------- suggestSearchTerms ツール（統制語彙サジェスト） ----------
+//
+// issue #2 合意設計:
+//  - 拡張トリガーの判断は AI 自身に委ねる（自動チェーンはしない）
+//  - 既定の参照語彙は imperative.html フッタのチェックボックス（localStorage に保存）
+//  - ツール呼び出し時に vocabularies 引数で明示指定があればそれを優先
 
-  const tool = buildTool();
+function buildVocabTool() {
+  const description =
+    'NDL Authorities (NDLSH 件名標目) と AGROVOC (FAO 多言語農業シソーラス) を SPARQL で照会し、' +
+    '入力語の別名 (altLabel)・上位語 (broader)・下位語 (narrower)・関連語 (related)・' +
+    '多言語ラベル・学名（AGROVOC の Oryza sativa など）を返す。' +
+    `${TOOL_NAME} がヒット数 ${EXPANSION_HINT_THRESHOLD} 件未満で expansionHint を出した場合、` +
+    `本ツールに代表語を渡して展開後の検索語を取得し、${TOOL_NAME} を再度呼び直すと取りこぼしを減らせる。`;
 
+  const inputSchema = {
+    type: 'object',
+    properties: {
+      term: {
+        type: 'string',
+        description: '展開元となる検索語。日本語・英語・学名いずれでも可（例: "イネ", "rice", "Oryza sativa"）',
+      },
+      vocabularies: {
+        type: 'array',
+        items: { type: 'string', enum: ['ndla', 'agrovoc'] },
+        description:
+          '参照する語彙の配列。未指定の場合はページのフッタ設定（localStorage に保存）に従う。' +
+          '"ndla" = NDLSH（日本語の件名標目・別名・上下位語に強い）、' +
+          '"agrovoc" = AGROVOC（多言語・学名・NAL Thesaurus への exactMatch に強い）。',
+      },
+      limit: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 50,
+        description: '各語彙から取得する候補概念の上位件数（既定 10）',
+      },
+    },
+    required: ['term'],
+  };
+
+  return {
+    name: VOCAB_TOOL_NAME,
+    description,
+    inputSchema,
+    async execute(args) {
+      const term = String(args?.term ?? '').trim();
+      if (!term) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ ok: false, error: 'term is required' }) }],
+        };
+      }
+      const requestedVocabs = Array.isArray(args?.vocabularies) && args.vocabularies.length > 0
+        ? args.vocabularies
+        : getDefaultVocabularies();
+      const limit = Math.max(1, Math.min(50, Number(args?.limit) || 10));
+
+      const adapterMap = { ndla: ndlaAdapter, agrovoc: agrovocAdapter };
+      const chosen = requestedVocabs
+        .filter((v, i, arr) => arr.indexOf(v) === i)
+        .map((v) => adapterMap[v])
+        .filter(Boolean);
+
+      if (chosen.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              ok: false,
+              error: 'no vocabularies selected (both NDLA and AGROVOC are disabled)',
+              hint: 'imperative.html フッタの「統制語彙」設定を開き、NDLSH / AGROVOC のいずれかを有効化してください。',
+            }),
+          }],
+        };
+      }
+
+      const settled = await Promise.allSettled(
+        chosen.map((a) => a.searchTerms(term, { limit })),
+      );
+      const perVocab = {};
+      const allConcepts = [];
+      for (let i = 0; i < chosen.length; i++) {
+        const v = chosen[i].vocabulary;
+        const s = settled[i];
+        if (s.status === 'fulfilled' && s.value?.ok) {
+          perVocab[v] = {
+            ok: true,
+            total: s.value.total,
+            concepts: s.value.concepts,
+            warning: s.value.warning,
+          };
+          allConcepts.push(...(s.value.concepts || []));
+        } else {
+          perVocab[v] = {
+            ok: false,
+            error: s.status === 'fulfilled' ? s.value?.error : (s.reason?.message || String(s.reason)),
+          };
+        }
+      }
+      const expanded = collectAllTerms(allConcepts);
+
+      const agentReturn = {
+        '@context': {
+          skos: 'http://www.w3.org/2004/02/skos/core#',
+          skosxl: 'http://www.w3.org/2008/05/skos-xl#',
+          ndla: 'http://id.ndl.go.jp/auth/ndla/',
+          agrovoc: 'http://aims.fao.org/aos/agrovoc/',
+        },
+        source: 'vocab-suggest',
+        ok: Object.values(perVocab).some((x) => x.ok),
+        inputTerm: term,
+        vocabularies: requestedVocabs,
+        expandedTerms: expanded.terms,
+        expandedTermsByLang: expanded.byLang,
+        byVocabulary: perVocab,
+        suggestion:
+          `これらの検索語候補（${expanded.terms.length} 件）を ${TOOL_NAME} の q または title に ` +
+          `スペース区切りまたは OR 結合で渡して再検索すると、表記ゆれを横断できる。`,
+      };
+
+      // デバッグペインにも表示（最後の suggestSearchTerms 呼び出し）
+      if (debugArgsEl) debugArgsEl.textContent = JSON.stringify(args, null, 2);
+      if (debugReturnEl) {
+        const preview = {
+          '@context': agentReturn['@context'],
+          source: agentReturn.source,
+          ok: agentReturn.ok,
+          inputTerm: agentReturn.inputTerm,
+          vocabularies: agentReturn.vocabularies,
+          expandedTerms: agentReturn.expandedTerms.slice(0, 30),
+          _expandedTermsTotal: agentReturn.expandedTerms.length,
+          byVocabulary: Object.fromEntries(
+            Object.entries(perVocab).map(([k, v]) => [k, v.ok
+              ? { ok: true, total: v.total, conceptsPreview: (v.concepts || []).slice(0, 3) }
+              : v]),
+          ),
+        };
+        debugReturnEl.textContent = JSON.stringify(preview, null, 2);
+      }
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(agentReturn, null, 2) }],
+      };
+    },
+  };
+}
+
+function tryRegisterTool(reg, tool) {
   if (reg.kind === 'registerTool') {
-    // 同名ツールが残っているケース（前回ページ遷移・他タブ）に備え、まず解除を試みる
     if (typeof reg.mc.unregisterTool === 'function') {
       try { reg.mc.unregisterTool(tool.name); } catch (_) { /* 未登録なら無視 */ }
     }
@@ -439,17 +640,27 @@ function registerWebMCPTool() {
     } catch (e) {
       if (e && e.name === 'InvalidStateError' &&
           /Duplicate tool name/i.test(e.message || '')) {
-        // 既に同名ツールが登録済み。index.html を別タブで開いている等。
-        // 解除不能のためフォーム検索のみ動作する状態として継続。
         console.warn(`${tool.name} は既に登録済みです。今回の登録はスキップします:`, e.message);
       } else {
         throw e;
       }
     }
   } else if (reg.kind === 'provideContext') {
-    // 旧仕様の後方互換
     reg.mc.provideContext({ tools: [tool] });
   }
+}
+
+function registerWebMCPTool() {
+  const reg = getRegistrationApi();
+  if (!reg) return;
+
+  if (reg.kind === 'provideContext') {
+    // 旧仕様は 1 回の呼び出しでまとめて渡す
+    reg.mc.provideContext({ tools: [buildTool(), buildVocabTool()] });
+    return;
+  }
+  tryRegisterTool(reg, buildTool());
+  tryRegisterTool(reg, buildVocabTool());
 }
 
 // ---------- appid 設定 UI ----------
@@ -490,6 +701,16 @@ function wireAppIdSettings() {
   }
 }
 
+function wireVocabSettings() {
+  const ndlaEl = $('#vocabNdla');
+  const agrEl = $('#vocabAgrovoc');
+  if (!ndlaEl || !agrEl) return;
+  ndlaEl.checked = getVocabPref('ndla');
+  agrEl.checked = getVocabPref('agrovoc');
+  ndlaEl.addEventListener('change', () => setVocabPref('ndla', ndlaEl.checked));
+  agrEl.addEventListener('change', () => setVocabPref('agrovoc', agrEl.checked));
+}
+
 // ---------- 起動 ----------
 function init() {
   form.addEventListener('submit', (e) => {
@@ -506,6 +727,7 @@ function init() {
   }
 
   wireAppIdSettings();
+  wireVocabSettings();
   detectWebMCP();
   try {
     registerWebMCPTool();

@@ -17,7 +17,11 @@
       著者・件名・同定子（DOI/URI）・刊行物メタ等の<strong>セマンティック情報を保持したまま</strong> AI に返します。
     </p>
     <p id="mcp-status" class="mcp-status" data-supported="false">WebMCP: 検出中…</p>
-    <p class="nav-link"><a href="index.html">← 通常版デモ（宣言的API + 命令的API 併用）に戻る</a></p>
+    <p class="nav-link">
+      <a href="index.html">← 通常版デモ（宣言的API + 命令的API 併用）に戻る</a>
+      <span style="margin: 0 8px;">|</span>
+      <a href="vocab.html">統制語彙サジェスト 検証ページ →</a>
+    </p>
   </header>
 
   <main>
@@ -164,6 +168,19 @@
         <input type="text" id="appidInput" placeholder="CiNii の appid" />
         <button type="button" id="appidSave">保存</button>
         <button type="button" id="appidClear">削除</button>
+      </div>
+    </details>
+
+    <details class="appid-config" id="vocabConfig">
+      <summary>統制語彙（NDLSH / AGROVOC）の既定参照先を設定する</summary>
+      <p>
+        <code>suggestSearchTerms</code> ツールが <code>vocabularies</code> 引数を省略された場合に
+        参照する語彙の既定値です（<code>localStorage</code> にのみ保存）。
+        <a href="vocab.html">vocab.html</a> で挙動を直接確認できます。
+      </p>
+      <div class="appid-row">
+        <label><input type="checkbox" id="vocabNdla" /> Web NDL Authorities (NDLSH 件名標目)</label>
+        <label><input type="checkbox" id="vocabAgrovoc" /> AGROVOC (FAO 多言語農業シソーラス)</label>
       </div>
     </details>
     <p class="footer-meta">
