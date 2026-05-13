@@ -1,7 +1,7 @@
 # WebMCP による文献検索デモンストレーション
 
 [WebMCP](https://github.com/webmachinelearning/webmcp) に対応したブラウザでは AI エージェントから同じ検索フォームを `searchPaper` ツールとして利用できます。
-この機能を利用して、AI エージェントを介してCiNii Research を自然言語により検索できます。
+この機能を利用して、AI エージェントを介してCiNii Research を自然言語により検索するデモンストレーションを作成しました。
 
 ## 動作環境
 
@@ -56,9 +56,9 @@
 
 ### 命令的API + JSON-LD セマンティック整備版デモ（`imperative.html`）
 
-通常版（`index.html`）と並行して、もう一つのデモページを用意しています。
+通常版（`https://tzhaya.github.io/webmcp-opensearch-ui/index.html`）と並行して、もう一つのデモページを用意しています。
 
-- **URL**: `http://localhost:8000/imperative.html`（通常版フッタからもリンク）
+- **URL**: `https://tzhaya.github.io/webmcp-opensearch-ui/imperative.html`（通常版フッタからもリンク）
 - **特徴**:
   - フォーム要素に WebMCP の宣言的属性（`toolname` / `toolparamdescription`）を **一切付けず**、
     命令的 API `navigator.modelContext.registerTool()` 一本で `searchPaper` を登録
