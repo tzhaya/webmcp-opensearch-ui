@@ -20,6 +20,9 @@ const SUPPORTED_PARAMS = [
   'q', 'title', 'publicationTitle', 'name', 'affiliation', 'description',
   'productYearFrom', 'productYearUntil', 'hasLinkToFullText',
   'languageType',
+  // category は books 検索専用。NDC8/9/10/NDLC のコード文字列を半角スペース区切りで OR 検索。
+  // 例: "613 615 DH435"。CiNii 側は scheme を区別せずコード文字列でマッチする。
+  'category',
   'sortorder', 'count', 'start'
 ];
 
@@ -324,7 +327,7 @@ export const ciniiJsonldAdapter = {
   supportedFields: [
     'q', 'title', 'publicationTitle', 'name', 'affiliation', 'description',
     'productYearFrom', 'productYearUntil', 'hasLinkToFullText',
-    'languageType',
+    'languageType', 'category',
     'sortorder', 'resourceType', 'count', 'start',
   ],
   buildURL,

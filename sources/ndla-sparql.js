@@ -18,6 +18,22 @@ import { runSparql, flattenBindings, escapeSparqlString } from './sparql-utils.j
 export const NDLA_ENDPOINT = 'https://id.ndl.go.jp/auth/ndla/sparql';
 export const NDLSH_URI_PREFIX = 'http://id.ndl.go.jp/auth/ndlsh/';
 
+// NDLA の skos:relatedMatch URI から「分類スキーム」と「分類記号」を抽出する。
+// 観測した形式:
+//   http://id.ndl.go.jp/class/ndc8/...   NDC 8版
+//   http://id.ndl.go.jp/class/ndc9/...   NDC 9版
+//   http://id.ndl.go.jp/class/ndc10/...  NDC 10版
+//   http://id.ndl.go.jp/class/ndlc/...   NDLC（国立国会図書館分類表）
+// CiNii Research books の category パラメータは scheme を区別せずコード文字列で受けるため、
+// scheme は AI 判断材料として保持しつつ code は素のまま渡す。
+const CLASS_URI_RE = /^https?:\/\/id\.ndl\.go\.jp\/class\/([a-z0-9]+)\/(.+)$/i;
+export function parseClassUri(uri) {
+  if (!uri) return null;
+  const m = String(uri).match(CLASS_URI_RE);
+  if (!m) return { uri, scheme: null, code: null };
+  return { uri, scheme: m[1].toLowerCase(), code: decodeURIComponent(m[2]) };
+}
+
 // 件名標目検索クエリを組み立てる。
 //   term: ユーザー入力の検索語（部分一致）
 //   limit: SPARQL の上位件数。NDLA は 1 クエリ最大 1000 件。
@@ -57,6 +73,7 @@ SELECT ?concept ?prefLabel ?altLabel
        ?narrower ?narrowerLabel
        ?related ?relatedLabel
        ?exactMatch
+       ?relatedMatch
 WHERE {
   VALUES ?concept { ${values} }
   OPTIONAL { ?concept rdfs:label ?prefLabel }
@@ -65,6 +82,7 @@ WHERE {
   OPTIONAL { ?concept skos:narrower ?narrower . OPTIONAL { ?narrower rdfs:label ?narrowerLabel } }
   OPTIONAL { ?concept skos:related ?related . OPTIONAL { ?related rdfs:label ?relatedLabel } }
   OPTIONAL { ?concept skos:exactMatch ?exactMatch }
+  OPTIONAL { ?concept skos:relatedMatch ?relatedMatch }
 }
 LIMIT 1000`;
 }
@@ -86,6 +104,7 @@ function aggregateRows(rows) {
         narrower: [],
         related: [],
         exactMatch: [],
+        relatedMatch: [],
       };
       byUri.set(uri, c);
     }
@@ -108,6 +127,12 @@ function aggregateRows(rows) {
     addRel('related', row.related, row.relatedLabel);
     if (row.exactMatch?.value && !c.exactMatch.includes(row.exactMatch.value)) {
       c.exactMatch.push(row.exactMatch.value);
+    }
+    if (row.relatedMatch?.value) {
+      const parsed = parseClassUri(row.relatedMatch.value);
+      if (parsed && !c.relatedMatch.some((x) => x.uri === parsed.uri)) {
+        c.relatedMatch.push(parsed);
+      }
     }
   }
   return Array.from(byUri.values());

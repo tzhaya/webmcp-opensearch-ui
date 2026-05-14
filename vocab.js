@@ -189,6 +189,19 @@ function renderConcept(c, vocabulary) {
     }
   }
 
+  // relatedMatch（NDLA のみ）— NDC/NDLC 分類記号
+  if (Array.isArray(c.relatedMatch) && c.relatedMatch.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'result-identifiers';
+    const fmt = c.relatedMatch
+      .map((rm) => rm.scheme && rm.code ? `${rm.scheme}:${rm.code}` : rm.uri)
+      .slice(0, 12)
+      .join(' / ');
+    const more = c.relatedMatch.length > 12 ? ` … +${c.relatedMatch.length - 12}` : '';
+    row.textContent = `relatedMatch (分類記号): ${fmt}${more}`;
+    li.appendChild(row);
+  }
+
   return li;
 }
 

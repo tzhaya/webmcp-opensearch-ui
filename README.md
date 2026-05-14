@@ -32,6 +32,9 @@
       NDLSH / AGROVOC で「飼料イネ」「稲」「rice」「Oryza sativa」「벼」等、自動的に関連するキーワードを加えて再検索します。
 - 統制語彙サジェストの検証ページ（SPARQL の素の挙動確認）
   - https://tzhaya.github.io/webmcp-opensearch-ui/vocab.html
+- NDLSH 件名標目から NDC/NDLC 分類記号を取り出し、CiNii Books の `category` パラメータで OR 検索 (`suggestClassificationCodes` ツール)
+  - 例：「水稲の病害に関する図書を分類で探して」と依頼すると、AI が件名「イネ」「病害虫」等から
+    NDC9 616.2 / NDC10 616.21 / NDLC RB123 等を抽出し、`category="616.2 616.21 RB123"` で書籍検索を実行
 
 ## ローカル環境での実行
 
@@ -183,6 +186,48 @@
 
 - **動作確認用ページ**（WebMCP 非対応でも動作）
   - [vocab.html](vocab.html) を開いて任意の語で SPARQL を直接実行・結果と SPARQL クエリ本体を確認できます。
+    NDLSH 概念には `relatedMatch (分類記号)` 行で NDC/NDLC コードも表示されます。
+
+### 分類記号による書籍検索（`suggestClassificationCodes` ツール）
+
+NDLSH 件名標目には `skos:relatedMatch` で NDC（日本十進分類法 8/9/10 版）と NDLC（国立国会図書館分類）の
+分類記号がリンクしています。`suggestClassificationCodes` ツールはこの関係を辿って分類記号を抽出し、
+CiNii Research の書籍検索 (`category` パラメータ) に渡せる形式で返します。
+
+- **使い分け**:
+  - `suggestSearchTerms`: **語**の表記ゆれを吸収（別名・上下位語・多言語ラベル）
+  - `suggestClassificationCodes`: **書誌分類体系**から関連資料を網羅（同分類の図書を一括 OR 検索）
+- **CiNii の `category` パラメータ仕様**（実機検証済み）:
+  - 半角スペース区切りで複数指定 → OR 検索（カンマ区切りは無効）
+  - NDC8/9/10/NDLC は scheme 区別なくコード文字列でマッチ
+  - 書籍 (`resourceType=books`) でのみ有効
+- **AI 戻り値の例**（`term: "イネ"` 呼び出し時、抜粋）
+
+  ```jsonc
+  {
+    "@context": { "skos": "...", "ndla": "...", "ndc": "..." },
+    "source": "classification-suggest",
+    "inputTerm": "イネ",
+    "sourceConcepts": [
+      { "uri": "http://id.ndl.go.jp/auth/ndlsh/00564288", "prefLabel": "イネ", "codes": ["616.2", ...] }
+    ],
+    "codesByScheme": {
+      "ndc9":  [{ "code": "616.2", "sourceConcept": "イネ", "sourceUri": "..." }],
+      "ndc10": [{ "code": "616.21", "sourceConcept": "イネ", "sourceUri": "..." }],
+      "ndlc":  [{ "code": "RB123", "sourceConcept": "イネ", "sourceUri": "..." }]
+    },
+    "totalCodes": 8,
+    "usedCodes": ["616.2", "616.21", "RB123"],
+    "suggestedCategoryParam": "616.2 616.21 RB123",
+    "suggestedCall": {
+      "tool": "searchPaper",
+      "args": { "resourceType": "books", "category": "616.2 616.21 RB123" }
+    }
+  }
+  ```
+
+- **フッタ設定**: 「分類記号（NDC/NDLC）レコメンドの有効/無効」で `searchPaper` 戻り値ヒントへの含め方を切替
+  （`localStorage` キー: `vocab.classification.enabled`、既定 `true`）。ツール自体は常に登録される。
 
 ## ディレクトリ構成
 

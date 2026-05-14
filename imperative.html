@@ -99,6 +99,12 @@
         </label>
 
         <label class="field">
+          <span class="field-label">分類記号 (NDC/NDLC, books 専用)</span>
+          <input type="text" name="category"
+            placeholder="例: 613 615 DH435 (半角スペース区切り = OR)" />
+        </label>
+
+        <label class="field">
           <span class="field-label">CiNii 検索種別</span>
           <select name="resourceType">
             <option value="all" selected>すべて (all)</option>
@@ -182,6 +188,19 @@
       <div class="appid-row">
         <label><input type="checkbox" id="vocabNdla" /> Web NDL Authorities (NDLSH 件名標目)</label>
         <label><input type="checkbox" id="vocabAgrovoc" /> AGROVOC (FAO 多言語農業シソーラス)</label>
+      </div>
+    </details>
+
+    <details class="appid-config" id="classConfig">
+      <summary>分類記号（NDC/NDLC）レコメンドの有効/無効</summary>
+      <p>
+        <code>searchPaper</code> の戻り値ヒント (<code>expansionHint</code>) に
+        「<code>suggestClassificationCodes</code> ツールで NDLSH 件名標目から NDC/NDLC を取り出し
+        書籍検索の <code>category</code> パラメータに OR で渡す」案内を含めるかどうか。
+        無効化してもツール自体は登録・呼び出し可能です。
+      </p>
+      <div class="appid-row">
+        <label><input type="checkbox" id="classEnabled" /> 分類記号レコメンドのヒントを出す</label>
       </div>
     </details>
     <p class="footer-meta">

@@ -16,12 +16,13 @@ import { collectAllTerms } from './sources/sparql-utils.js';
 const LOGICAL_FIELDS = [
   'q', 'title', 'publicationTitle', 'name', 'affiliation', 'description',
   'productYearFrom', 'productYearUntil', 'hasLinkToFullText',
-  'languageType',
+  'languageType', 'category',
   'sortorder', 'resourceType', 'count', 'start',
 ];
 
 const TOOL_NAME = 'searchPaper';
 const VOCAB_TOOL_NAME = 'suggestSearchTerms';
+const CLASS_TOOL_NAME = 'suggestClassificationCodes';
 
 // expansionHint を出すしきい値（件数）。
 // この件数未満のヒットだった場合、searchPaper の戻り値に
@@ -33,6 +34,21 @@ const VOCAB_PREF_KEYS = {
   ndla: 'vocab.ndla.enabled',
   agrovoc: 'vocab.agrovoc.enabled',
 };
+
+// 分類記号レコメンド機能の有効/無効。既定 true。
+// false のとき: searchPaper の expansionHint に分類記号系の suggestion を出さない。
+const CLASS_PREF_KEY = 'vocab.classification.enabled';
+function getClassPref() {
+  try {
+    const v = localStorage.getItem(CLASS_PREF_KEY);
+    if (v === null) return true;
+    return v === '1' || v === 'true';
+  } catch { return true; }
+}
+function setClassPref(enabled) {
+  try { localStorage.setItem(CLASS_PREF_KEY, enabled ? '1' : '0'); }
+  catch { /* localStorage 不可 */ }
+}
 
 function getVocabPref(vocab) {
   try {
@@ -355,6 +371,20 @@ function buildExpansionHint(total, params) {
   const candidateTerms = ['q', 'title', 'description', 'publicationTitle']
     .map((k) => params[k]).filter(Boolean);
   if (candidateTerms.length === 0) return null;
+
+  const suggestions = [
+    `${VOCAB_TOOL_NAME} で別名・上下位語・多言語ラベル・学名に展開する`,
+  ];
+  // resourceType が books または all（未指定含む）かつ分類記号機能が有効なときのみ追加
+  const rt = params.resourceType || 'all';
+  const classApplicable = (rt === 'books' || rt === 'all') && getClassPref();
+  if (classApplicable) {
+    suggestions.push(
+      `${CLASS_TOOL_NAME} で件名標目から NDC/NDLC 分類記号を取り出し、` +
+      `{ resourceType:"books", category:"<コード群>" } で書誌分類体系から OR 検索する`,
+    );
+  }
+
   return {
     suggested: true,
     reason: 'low-result-count',
@@ -362,10 +392,11 @@ function buildExpansionHint(total, params) {
     currentCount: total,
     candidateTerms,
     suggestion:
-      `ヒット数が ${total} 件と少ないため、${VOCAB_TOOL_NAME} ツールに ` +
-      `代表的な検索語（例: ${candidateTerms.slice(0, 2).map((t) => `"${t}"`).join(', ')}）を渡して ` +
-      `NDLSH / AGROVOC で別名・上下位語・多言語ラベル・学名に展開し、再度 ${TOOL_NAME} を呼び出すと取りこぼしを減らせる可能性があります。`,
+      `ヒット数が ${total} 件と少ないため、以下のいずれか・両方を試すと取りこぼしを減らせる可能性があります: ` +
+      suggestions.map((s, i) => `(${i + 1}) ${s}`).join(' / ') +
+      `。代表的な検索語: ${candidateTerms.slice(0, 2).map((t) => `"${t}"`).join(', ')}`,
     vocabularies: getDefaultVocabularies(),
+    classificationApplicable: classApplicable,
   };
 }
 
@@ -445,6 +476,14 @@ function buildTool() {
         type: 'string',
         description:
           '資料の言語種別。ISO-639-1 コード（例: ja=日本語, en=英語, zh=中国語, ko=韓国語, fr=仏語, de=独語, es=西語）。複数指定はカンマ区切りで OR。例: "ja,en"。researchers 検索では非対応。',
+      },
+      category: {
+        type: 'string',
+        description:
+          '分類記号（書籍検索 books 専用）。NDC（日本十進分類法 8/9/10 版）または NDLC（国会図書館分類）のコード文字列。' +
+          '複数指定は半角スペース区切りで OR 検索（例: "613 615 DH435" → 613 OR 615 OR DH435）。' +
+          `${CLASS_TOOL_NAME} ツールで件名標目から関連 NDC/NDLC を取得し、その suggestedCategoryParam をそのまま渡せる。` +
+          'resourceType=books 以外では効果なし。',
       },
       resourceType: {
         type: 'string',
@@ -630,6 +669,155 @@ function buildVocabTool() {
   };
 }
 
+// ---------- suggestClassificationCodes ツール（分類記号サジェスト） ----------
+//
+// NDLSH 件名標目の skos:relatedMatch から NDC（日本十進分類法）/ NDLC のコードを抽出し、
+// CiNii Research books の category パラメータに直接渡せる文字列を生成する。
+//
+// 設計:
+//  - 件名標目→分類記号の階段を 1 ツールで完結（AI 側で SPARQL 構築不要）
+//  - suggestSearchTerms（語の表記ゆれ吸収）とは別ツール — AI 判断キューを分けるため
+//  - 自動チェーンしない: AI が「分類記号で検索したい」と判断したときだけ呼ぶ
+//  - 戻り値の suggestedCategoryParam を searchPaper の category に渡せば即 OR 検索可能
+
+function buildClassTool() {
+  const description =
+    '入力語を NDLSH 件名標目（NDL Authorities）で照会し、リンクする ' +
+    'skos:relatedMatch から NDC（日本十進分類法 8/9/10 版）および NDLC（国会図書館分類）の' +
+    `分類記号を抽出する。CiNii Research の書籍検索（${TOOL_NAME} で resourceType=books）の ` +
+    'category パラメータに渡せる「半角スペース区切り OR 形式」の文字列を生成して返す。' +
+    '同じ件名概念の複数 scheme（ndc9/ndc10/ndlc）が並ぶことを想定し、AI 側で必要な scheme を選別できるよう ' +
+    'codesByScheme と sourceConcepts も同時に返す。';
+
+  const inputSchema = {
+    type: 'object',
+    properties: {
+      term: {
+        type: 'string',
+        description: '展開元となる検索語（日本語）。NDLSH の prefLabel/altLabel 部分一致で件名標目を引く。',
+      },
+      schemes: {
+        type: 'array',
+        items: { type: 'string', enum: ['ndc8', 'ndc9', 'ndc10', 'ndlc'] },
+        description:
+          '使用する分類スキームの絞り込み（既定: 全スキーム）。例: ["ndc9","ndc10"] で NDC のみ。' +
+          'CiNii の category はスキーム区別せずコード文字列でマッチするので、scheme 制限は精度調整用。',
+      },
+      conceptLimit: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 30,
+        description: '照会する件名概念の上位件数（既定 5）。多くするほど候補は増えるが OR が広がりノイズも増える。',
+      },
+      maxCodes: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 50,
+        description: '最終的に suggestedCategoryParam に含めるコード数の上限（既定 10）。',
+      },
+    },
+    required: ['term'],
+  };
+
+  return {
+    name: CLASS_TOOL_NAME,
+    description,
+    inputSchema,
+    async execute(args) {
+      const term = String(args?.term ?? '').trim();
+      if (!term) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ ok: false, error: 'term is required' }) }],
+        };
+      }
+      const allowedSchemes = Array.isArray(args?.schemes) && args.schemes.length > 0
+        ? new Set(args.schemes)
+        : null;
+      const conceptLimit = Math.max(1, Math.min(30, Number(args?.conceptLimit) || 5));
+      const maxCodes = Math.max(1, Math.min(50, Number(args?.maxCodes) || 10));
+
+      let result;
+      try {
+        result = await ndlaAdapter.searchTerms(term, { limit: conceptLimit });
+      } catch (e) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ ok: false, error: e?.message || String(e) }) }],
+        };
+      }
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ ok: false, error: result.error || 'NDLA query failed' }) }],
+        };
+      }
+
+      // 集約: code 文字列単位で重複排除しつつ scheme 別にも保存
+      const seenCodes = new Set();
+      const orderedCodes = []; // suggestedCategoryParam の出力順序保持
+      const codesByScheme = {};
+      const sourceConcepts = [];
+
+      for (const c of result.concepts) {
+        const prefJa = c.prefLabel?.ja || c.prefLabel?.[''] || '';
+        const conceptCodes = [];
+        for (const rm of c.relatedMatch || []) {
+          if (!rm.code || !rm.scheme) continue;
+          if (allowedSchemes && !allowedSchemes.has(rm.scheme)) continue;
+          (codesByScheme[rm.scheme] ||= []).push({ code: rm.code, sourceConcept: prefJa, sourceUri: c.uri });
+          if (!seenCodes.has(rm.code)) {
+            seenCodes.add(rm.code);
+            orderedCodes.push(rm.code);
+            conceptCodes.push(rm.code);
+          } else {
+            conceptCodes.push(rm.code);
+          }
+        }
+        sourceConcepts.push({
+          uri: c.uri,
+          prefLabel: prefJa,
+          codes: conceptCodes,
+        });
+      }
+
+      const usedCodes = orderedCodes.slice(0, maxCodes);
+      const suggestedCategoryParam = usedCodes.join(' ');
+
+      const agentReturn = {
+        '@context': {
+          skos: 'http://www.w3.org/2004/02/skos/core#',
+          ndla: 'http://id.ndl.go.jp/auth/ndla/',
+          ndc: 'http://id.ndl.go.jp/class/',
+        },
+        source: 'classification-suggest',
+        ok: true,
+        inputTerm: term,
+        sourceConcepts,
+        codesByScheme,
+        totalCodes: orderedCodes.length,
+        usedCodes,
+        suggestedCategoryParam,
+        suggestedCall: usedCodes.length > 0
+          ? { tool: TOOL_NAME, args: { resourceType: 'books', category: suggestedCategoryParam } }
+          : null,
+        suggestion: usedCodes.length > 0
+          ? `これらの分類記号 (${usedCodes.length} 件) を ${TOOL_NAME} に ` +
+            `{ resourceType:"books", category:"${suggestedCategoryParam}" } として渡すと、` +
+            'CiNii Books で同分類の書籍を OR 検索できる。' +
+            '件名標目の語そのものより、書誌の分類体系から関連資料を網羅的に拾える。'
+          : '該当件名標目に skos:relatedMatch（NDC/NDLC）が見つからなかった。term を別語で試すか ' +
+            `${VOCAB_TOOL_NAME} で別名展開を先に試すと良い。`,
+      };
+
+      // デバッグペイン
+      if (debugArgsEl) debugArgsEl.textContent = JSON.stringify(args, null, 2);
+      if (debugReturnEl) debugReturnEl.textContent = JSON.stringify(agentReturn, null, 2);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(agentReturn, null, 2) }],
+      };
+    },
+  };
+}
+
 function tryRegisterTool(reg, tool) {
   if (reg.kind === 'registerTool') {
     if (typeof reg.mc.unregisterTool === 'function') {
@@ -656,11 +844,12 @@ function registerWebMCPTool() {
 
   if (reg.kind === 'provideContext') {
     // 旧仕様は 1 回の呼び出しでまとめて渡す
-    reg.mc.provideContext({ tools: [buildTool(), buildVocabTool()] });
+    reg.mc.provideContext({ tools: [buildTool(), buildVocabTool(), buildClassTool()] });
     return;
   }
   tryRegisterTool(reg, buildTool());
   tryRegisterTool(reg, buildVocabTool());
+  tryRegisterTool(reg, buildClassTool());
 }
 
 // ---------- appid 設定 UI ----------
@@ -711,6 +900,13 @@ function wireVocabSettings() {
   agrEl.addEventListener('change', () => setVocabPref('agrovoc', agrEl.checked));
 }
 
+function wireClassSettings() {
+  const el = $('#classEnabled');
+  if (!el) return;
+  el.checked = getClassPref();
+  el.addEventListener('change', () => setClassPref(el.checked));
+}
+
 // ---------- 起動 ----------
 function init() {
   form.addEventListener('submit', (e) => {
@@ -728,6 +924,7 @@ function init() {
 
   wireAppIdSettings();
   wireVocabSettings();
+  wireClassSettings();
   detectWebMCP();
   try {
     registerWebMCPTool();
