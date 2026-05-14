@@ -122,6 +122,39 @@
     と判断したときに `suggestSearchTerms` を呼び、展開後の検索語で再度 `searchPaper` で検索を実行します。
   - `AIエージェントによる司書的な検索支援` を意図しています。
 
+- **統制語彙が使われる条件**
+
+  1. **AI に「展開すべき」とヒントが出る条件**（`searchPaper` の戻り値）
+
+     [imperative.js](imperative.js) の `buildExpansionHint` で判定:
+     - **件数しきい値**: `total < EXPANSION_HINT_THRESHOLD`（既定 **10 件未満**）
+     - **代表語の存在**: `q` / `title` / `description` / `publicationTitle` のいずれかにユーザー入力がある
+       （`name` / `affiliation` の人名・機関名は対象外）
+     - **`result.ok === true`** で `total` が数値であること（エラー時は出さない）
+
+     上記すべて満たすと、AI 戻り値に `expansionHint: { suggested: true, reason: 'low-result-count', ... }` が
+     埋め込まれます。
+
+  2. **実際に `suggestSearchTerms` が呼ばれる条件**
+
+     - **AI 主導**: 自動チェーンしない設計。`expansionHint` を見た AI が判断して呼びます
+     - **必須引数**: `term`（空文字は弾く）
+     - **語彙選択の優先順位**:
+       1. 引数 `vocabularies: ["ndla"|"agrovoc"]` で明示指定 → それを使う
+       2. 未指定 → フッタ UI の `localStorage` 設定（既定はどちらも有効）
+     - **両方無効化**されている場合: エラー応答を返し、UI 案内文を `hint` に添えます
+
+  3. **語彙別の使い分け**（AI が判定するためのキュー）
+
+     - **`ndla`** → NDLSH。日本語件名標目・別名・上下位語に強い。和書中心の検索向き
+     - **`agrovoc`** → FAO 多言語シソーラス。多言語ラベル・学名（*Oryza sativa* など）・
+       NAL Thesaurus への `skos:exactMatch` を持つ。農学・国際文献向き
+
+  なお、以下の場合は統制語彙は使われません:
+  - 既定で 10 件以上ヒットしたとき（ヒント不出力 → AI は通常そのまま結果を返す）
+  - 人名 / 機関名のみで検索したとき（候補語抽出対象外）
+  - `searchPaper` がエラーで返ったとき（展開以前にエラーを返す）
+
 - **AI 戻り値の例**（`term: "イネ"` 呼び出し時、抜粋）
 
   ```jsonc
