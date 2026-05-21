@@ -9,6 +9,12 @@
 // 既存の app.js とは独立した実装で、index.html / app.js には影響しない。
 
 import { ciniiJsonldAdapter, JSONLD_CONTEXT } from './sources/cinii-jsonld.js';
+import {
+  affrcOpacAdapter,
+  JSONLD_CONTEXT_AFFRC,
+  getProxyUrlSetting as getAffrcProxyUrl,
+  setProxyUrlSetting as setAffrcProxyUrl,
+} from './sources/affrc-opac.js';
 import { ndlaAdapter } from './sources/ndla-sparql.js';
 import { agrovocAdapter } from './sources/agrovoc-sparql.js';
 import { collectAllTerms } from './sources/sparql-utils.js';
@@ -20,7 +26,16 @@ const LOGICAL_FIELDS = [
   'sortorder', 'resourceType', 'count', 'start',
 ];
 
+// AFFRC OpenSearch のフィールド名は CiNii と独立。
+// 特に「フリーワード」が `q` ではなく `keywd` である点に注意。
+const AFFRC_FIELDS = [
+  'keywd', 'title', 'auth', 'pub', 'year', 'isbnsn', 'ncid',
+  'cls', 'sh', 'cntry', 'lang',
+  'sortkey', 'listcnt', 'startpos',
+];
+
 const TOOL_NAME = 'searchPaper';
+const AFFRC_TOOL_NAME = 'searchAffrcOpac';
 const VOCAB_TOOL_NAME = 'suggestSearchTerms';
 const CLASS_TOOL_NAME = 'suggestClassificationCodes';
 
@@ -71,6 +86,7 @@ function getDefaultVocabularies() {
 }
 
 let currentAbort = null;
+let currentAffrcAbort = null;
 
 // ---------- DOM ----------
 const $ = (sel) => document.querySelector(sel);
@@ -82,6 +98,13 @@ const paginationEl = $('#pagination');
 const mcpStatusEl = $('#mcp-status');
 const debugArgsEl = $('#debugArgs');
 const debugReturnEl = $('#debugReturn');
+
+// AFFRC 用の DOM（imperative.html で CiNii と並列に追加した要素）
+const affrcForm = $('#affrcSearchForm');
+const affrcStatusEl = $('#affrcStatus');
+const affrcResultsHeader = $('#affrcResultsHeader');
+const affrcResultsEl = $('#affrcResults');
+const affrcPaginationEl = $('#affrcPagination');
 
 // ---------- フォーム / パラメータ変換 ----------
 function getFormParams(formEl) {
@@ -113,6 +136,44 @@ function normalizeArgs(args) {
   if (!args || typeof args !== 'object') return {};
   const out = {};
   for (const f of LOGICAL_FIELDS) {
+    if (args[f] !== undefined && args[f] !== null && String(args[f]).trim() !== '') {
+      out[f] = String(args[f]).trim();
+    }
+  }
+  return out;
+}
+
+// AFFRC 用の対称ヘルパ。CiNii 版と意図的に重複させ、命令的 API を 2 ツールで
+// 並列に示す教材価値を維持する（共通抽象化はしない）。
+function getAffrcFormParams(formEl) {
+  const fd = new FormData(formEl);
+  const params = {};
+  for (const f of AFFRC_FIELDS) {
+    const v = fd.get(f);
+    if (v !== null && String(v).trim() !== '') {
+      params[f] = String(v).trim();
+    }
+  }
+  return params;
+}
+
+function fillAffrcForm(params) {
+  if (!params || typeof params !== 'object' || !affrcForm) return;
+  for (const f of AFFRC_FIELDS) {
+    if (params[f] === undefined || params[f] === null) continue;
+    const el = affrcForm.elements.namedItem(f);
+    if (el) el.value = String(params[f]);
+  }
+}
+
+function affrcFormEl(name) {
+  return affrcForm ? affrcForm.elements.namedItem(name) : null;
+}
+
+function normalizeAffrcArgs(args) {
+  if (!args || typeof args !== 'object') return {};
+  const out = {};
+  for (const f of AFFRC_FIELDS) {
     if (args[f] !== undefined && args[f] !== null && String(args[f]).trim() !== '') {
       out[f] = String(args[f]).trim();
     }
@@ -298,6 +359,199 @@ function renderPagination(result, params) {
   paginationEl.appendChild(next);
 }
 
+// ---------- AFFRC 検索ディスパッチ / レンダリング ----------
+async function runAffrcSearch(params) {
+  if (currentAffrcAbort) currentAffrcAbort.abort();
+  currentAffrcAbort = new AbortController();
+  const signal = currentAffrcAbort.signal;
+
+  renderAffrcStatus('AFFRC を検索中...', 'info');
+  affrcResultsEl.replaceChildren();
+  affrcResultsHeader.replaceChildren();
+  affrcPaginationEl.replaceChildren();
+
+  let result;
+  try {
+    result = await affrcOpacAdapter.search(params, { signal });
+  } catch (e) {
+    result = { ok: false, source: 'affrc', error: e?.message || String(e) };
+  }
+
+  renderAffrcResults(result);
+  renderAffrcResultsHeader(result, params);
+  renderAffrcPagination(result, params);
+
+  if (result.ok) {
+    renderAffrcStatus('', '');
+  } else {
+    renderAffrcStatus(`AFFRC 検索に失敗しました。${result.error || ''}`, 'error');
+  }
+  return result;
+}
+
+function renderAffrcStatus(message, kind) {
+  if (!affrcStatusEl) return;
+  affrcStatusEl.textContent = message || '';
+  affrcStatusEl.dataset.kind = kind || '';
+}
+
+function renderAffrcResultsHeader(result, params) {
+  if (!result.ok) return;
+  const start = Number(params.startpos) || 1;
+  const count = Number(params.listcnt) || 20;
+  const div = document.createElement('div');
+  div.className = 'results-header';
+  div.textContent =
+    `AFFRC OPAC: ${result.total ?? 0} 件` +
+    `（${start} 件目から最大 ${count} 件、合計 ${result.total ?? 0} 件）`;
+  affrcResultsHeader.replaceChildren(div);
+}
+
+function renderAffrcResults(result) {
+  affrcResultsEl.replaceChildren();
+  const section = document.createElement('section');
+  section.className = 'source-section';
+  section.dataset.source = 'affrc';
+
+  const h = document.createElement('h2');
+  h.className = 'source-title';
+  h.textContent = '農林水産関係試験研究機関総合目録 (AFFRC OPAC・dcndl)';
+  section.appendChild(h);
+
+  if (!result.ok) {
+    const msg = document.createElement('p');
+    msg.className = 'source-error';
+    msg.textContent = result.error || '検索に失敗しました。';
+    section.appendChild(msg);
+    affrcResultsEl.appendChild(section);
+    return;
+  }
+
+  if (!result.items || result.items.length === 0) {
+    const msg = document.createElement('p');
+    msg.className = 'source-empty';
+    msg.textContent = '該当する結果はありませんでした。';
+    section.appendChild(msg);
+    affrcResultsEl.appendChild(section);
+    return;
+  }
+
+  const ul = document.createElement('ul');
+  ul.className = 'result-list';
+  for (const item of result.items) {
+    ul.appendChild(renderAffrcItem(item));
+  }
+  section.appendChild(ul);
+  affrcResultsEl.appendChild(section);
+}
+
+function renderAffrcItem(item) {
+  const li = document.createElement('li');
+  li.className = 'result-item';
+
+  const titleEl = document.createElement('a');
+  titleEl.className = 'result-title';
+  titleEl.href = item.link || item.id || '#';
+  titleEl.target = '_blank';
+  titleEl.rel = 'noopener noreferrer';
+  titleEl.textContent = item.title || '(タイトル不明)';
+  li.appendChild(titleEl);
+
+  const meta = document.createElement('div');
+  meta.className = 'result-meta';
+  const metaParts = [];
+  if (item.creators && item.creators.length > 0) {
+    const names = item.creators.map((c) => c.name).filter(Boolean);
+    if (names.length > 0) {
+      metaParts.push(names.slice(0, 5).join(', ') + (names.length > 5 ? ' 他' : ''));
+    }
+  }
+  if (item.publisher?.name) metaParts.push(item.publisher.name);
+  if (item.date) metaParts.push(item.date);
+  if (item.extent) metaParts.push(item.extent);
+  meta.textContent = metaParts.join(' / ');
+  li.appendChild(meta);
+
+  if (item.subjects && item.subjects.length > 0) {
+    const subj = document.createElement('div');
+    subj.className = 'result-subjects';
+    subj.textContent = '件名: ' + item.subjects.map((s) => s.label).filter(Boolean).join(' / ');
+    li.appendChild(subj);
+  }
+
+  if (item.classification && item.classification.length > 0) {
+    const cls = document.createElement('div');
+    cls.className = 'result-classification';
+    cls.textContent = '分類: ' + item.classification
+      .map((c) => `${c.scheme}:${c.code}`)
+      .join(' / ');
+    li.appendChild(cls);
+  }
+
+  if (item.identifiers && item.identifiers.length > 0) {
+    const ids = document.createElement('div');
+    ids.className = 'result-identifiers';
+    ids.textContent = item.identifiers
+      .map((id) => `${id.type}: ${id.value}`)
+      .join(' / ');
+    li.appendChild(ids);
+  }
+
+  if (item.seeAlso && item.seeAlso.length > 0) {
+    const sa = document.createElement('div');
+    sa.className = 'result-seealso';
+    sa.textContent = '関連 (rdfs:seeAlso): ';
+    for (let i = 0; i < item.seeAlso.length; i++) {
+      if (i > 0) sa.appendChild(document.createTextNode(' / '));
+      const a = document.createElement('a');
+      a.href = item.seeAlso[i];
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = item.seeAlso[i];
+      sa.appendChild(a);
+    }
+    li.appendChild(sa);
+  }
+
+  return li;
+}
+
+function renderAffrcPagination(result, params) {
+  affrcPaginationEl.replaceChildren();
+  if (!result.ok) return;
+
+  const start = Number(params.startpos) || 1;
+  const count = Number(params.listcnt) || 20;
+  const maxTotal = result.total || 0;
+
+  const prev = document.createElement('button');
+  prev.type = 'button';
+  prev.textContent = '← 前へ';
+  prev.disabled = start <= 1;
+  prev.addEventListener('click', () => {
+    const next = Math.max(1, start - count);
+    affrcFormEl('startpos').value = String(next);
+    runAffrcSearch(getAffrcFormParams(affrcForm));
+  });
+  affrcPaginationEl.appendChild(prev);
+
+  const info = document.createElement('span');
+  info.className = 'page-info';
+  info.textContent = `${start} 〜 ${start + count - 1} 件目`;
+  affrcPaginationEl.appendChild(info);
+
+  const next = document.createElement('button');
+  next.type = 'button';
+  next.textContent = '次へ →';
+  next.disabled = start + count - 1 >= maxTotal;
+  next.addEventListener('click', () => {
+    const nextStart = start + count;
+    affrcFormEl('startpos').value = String(nextStart);
+    runAffrcSearch(getAffrcFormParams(affrcForm));
+  });
+  affrcPaginationEl.appendChild(next);
+}
+
 // ---------- WebMCP 検出と命令的 API ----------
 function getRegistrationApi() {
   const mc = navigator?.modelContext;
@@ -325,7 +579,7 @@ function detectWebMCP() {
 
     const main = document.createElement('span');
     main.textContent = supported
-      ? `WebMCP: このブラウザで利用可能（${reg.kind}() で ${TOOL_NAME} を登録します）`
+      ? `WebMCP: このブラウザで利用可能（${reg.kind}() で ${TOOL_NAME} / ${AFFRC_TOOL_NAME} / ${VOCAB_TOOL_NAME} / ${CLASS_TOOL_NAME} を登録します）`
       : 'WebMCP: 未対応（フォーム検索は動作）';
     mcpStatusEl.appendChild(main);
 
@@ -364,24 +618,32 @@ function stripRaw(item) {
 // 件数が少ない検索結果に対して、AI が「統制語彙で展開すれば取りこぼしを減らせる」と
 // 判断できるよう、ヒント情報を埋め込む。
 // 自動チェーンはしない — 拡張の要否判断は AI 側に委ねる方針（issue #2 の合意設計）。
-function buildExpansionHint(total, params) {
+//
+// options:
+//   toolName            再呼び出し対象ツール名（既定 TOOL_NAME = 'searchPaper'）
+//   termKeys            params から代表検索語を拾うキー配列（CiNii と AFFRC で異なる）
+//   classificationApplicable  分類記号レコメンドの提案を含めるか
+//   classificationParam       分類記号を渡す引数名（CiNii: category, AFFRC: cls）
+function buildExpansionHint(total, params, options = {}) {
+  const {
+    toolName = TOOL_NAME,
+    termKeys = ['q', 'title', 'description', 'publicationTitle'],
+    classificationApplicable = false,
+    classificationParam = 'category',
+  } = options;
+
   if (typeof total !== 'number') return null;
   if (total >= EXPANSION_HINT_THRESHOLD) return null;
-  // どの語句に対する展開かを示すため、ユーザーが入力した代表的な語を抽出
-  const candidateTerms = ['q', 'title', 'description', 'publicationTitle']
-    .map((k) => params[k]).filter(Boolean);
+  const candidateTerms = termKeys.map((k) => params[k]).filter(Boolean);
   if (candidateTerms.length === 0) return null;
 
   const suggestions = [
-    `${VOCAB_TOOL_NAME} で別名・上下位語・多言語ラベル・学名に展開する`,
+    `${VOCAB_TOOL_NAME} で別名・上下位語・多言語ラベル・学名に展開してから ${toolName} を再呼び出しする`,
   ];
-  // resourceType が books または all（未指定含む）かつ分類記号機能が有効なときのみ追加
-  const rt = params.resourceType || 'all';
-  const classApplicable = (rt === 'books' || rt === 'all') && getClassPref();
-  if (classApplicable) {
+  if (classificationApplicable) {
     suggestions.push(
       `${CLASS_TOOL_NAME} で件名標目から NDC/NDLC 分類記号を取り出し、` +
-      `{ resourceType:"books", category:"<コード群>" } で書誌分類体系から OR 検索する`,
+      `${toolName} の ${classificationParam} 引数に渡して書誌分類体系から OR 検索する`,
     );
   }
 
@@ -391,12 +653,13 @@ function buildExpansionHint(total, params) {
     threshold: EXPANSION_HINT_THRESHOLD,
     currentCount: total,
     candidateTerms,
+    targetTool: toolName,
     suggestion:
       `ヒット数が ${total} 件と少ないため、以下のいずれか・両方を試すと取りこぼしを減らせる可能性があります: ` +
       suggestions.map((s, i) => `(${i + 1}) ${s}`).join(' / ') +
       `。代表的な検索語: ${candidateTerms.slice(0, 2).map((t) => `"${t}"`).join(', ')}`,
     vocabularies: getDefaultVocabularies(),
-    classificationApplicable: classApplicable,
+    classificationApplicable,
   };
 }
 
@@ -410,16 +673,50 @@ function summarizeForAgent(result, params) {
       params,
     };
   }
-  const hint = buildExpansionHint(result.total, params);
+  const rt = params.resourceType || 'all';
+  const hint = buildExpansionHint(result.total, params, {
+    toolName: TOOL_NAME,
+    termKeys: ['q', 'title', 'description', 'publicationTitle'],
+    classificationApplicable: (rt === 'books' || rt === 'all') && getClassPref(),
+    classificationParam: 'category',
+  });
   return {
     '@context': JSONLD_CONTEXT,
     source: 'cinii',
-    resourceType: params.resourceType || 'all',
+    resourceType: rt,
     query: { ...params },
     total: result.total,
     start: result.start,
     perPage: result.perPage,
     items: (result.items || []).map(stripRaw),
+    ...(hint ? { expansionHint: hint } : {}),
+  };
+}
+
+function summarizeAffrcForAgent(result, params) {
+  if (!result.ok) {
+    return {
+      '@context': JSONLD_CONTEXT_AFFRC,
+      source: 'affrc',
+      ok: false,
+      error: result.error,
+      params,
+    };
+  }
+  const hint = buildExpansionHint(result.total, params, {
+    toolName: AFFRC_TOOL_NAME,
+    termKeys: ['keywd', 'title'],
+    classificationApplicable: getClassPref(),
+    classificationParam: 'cls',
+  });
+  return {
+    '@context': JSONLD_CONTEXT_AFFRC,
+    source: 'affrc',
+    query: { ...params },
+    total: result.total,
+    start: result.start,
+    perPage: result.perPage,
+    items: result.items || [],
     ...(hint ? { expansionHint: hint } : {}),
   };
 }
@@ -510,6 +807,81 @@ function buildTool() {
       fillForm(params);
       const result = await runSearch(params);
       const agentReturn = summarizeForAgent(result, params);
+      showDebug(args, agentReturn);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(agentReturn, null, 2),
+          },
+        ],
+      };
+    },
+  };
+}
+
+// ---------- searchAffrcOpac ツール（AFFRC OPAC・dcndl） ----------
+//
+// 設計判断:
+//  - searchPaper への source 引数統合ではなく、別ツールとして独立させる。
+//    パラメータ体系（keywd / cls / sh ...）が CiNii (q / category / ...) と大きく異なり、
+//    1 ツールに混ぜると AI が誤った組み合わせを生成しやすいため。
+//  - 命令的 API の例示として、複数の専門書誌を並列に登録できることを示す。
+
+function buildAffrcTool() {
+  const description =
+    '農林水産関係試験研究機関総合目録（AFFRC OPAC）の OpenSearch を ' +
+    'format=dcndl で検索する。農学・林学・水産学分野の灰色文献や試験報告書を多く含む。' +
+    '戻り値は dcndl ベースの JSON-LD 風構造で、著者典拠 URI、読み (transcription)、' +
+    'NDC 分類記号 URI（http://id.ndl.go.jp/class/ndc9/...）、' +
+    'CiNii NCID への rdfs:seeAlso 等を保持する。' +
+    'CiNii Research を覆う searchPaper とは別ツールとして独立。';
+
+  const inputSchema = {
+    type: 'object',
+    properties: {
+      keywd: {
+        type: 'string',
+        description:
+          'フリーワード（CiNii の q 相当）。本 API は q ではなく keywd という独自名を使用。' +
+          'タイトル・著者・件名などを横断検索する。',
+      },
+      title: { type: 'string', description: 'タイトルに含まれる語' },
+      auth: { type: 'string', description: '著者名' },
+      pub: { type: 'string', description: '出版者名' },
+      year: { type: 'string', description: '出版年（YYYY）' },
+      isbnsn: { type: 'string', description: 'ISBN または ISSN' },
+      ncid: { type: 'string', description: 'CiNii Books の NCID。AFFRC 結果の seeAlso URI 末尾と一致' },
+      cls: {
+        type: 'string',
+        description:
+          'NDC（日本十進分類法）または NDLC（国会図書館分類）の分類記号。**単一値のみ**受け付ける ' +
+          '（API 仕様策定者からの確認、2026-05）。複数コードを試したい場合は本ツールを順次呼び直す。' +
+          `${CLASS_TOOL_NAME} ツールで件名標目から関連 NDC/NDLC を取得し、その suggestedCalls から ` +
+          `tool="${AFFRC_TOOL_NAME}" の args.cls を取り出して渡せる。`,
+      },
+      sh: { type: 'string', description: '件名標目（NDLSH の prefLabel を直接渡せる）' },
+      cntry: { type: 'string', description: '出版国コード（例: jp, us）' },
+      lang: { type: 'string', description: '言語コード（例: jpn, eng）' },
+      sortkey: {
+        type: 'string',
+        description: 'ソート順。API 仕様書に値範囲が未記載のため、未指定推奨。',
+      },
+      listcnt: { type: 'string', description: '1ページの件数（既定 20、最大は実機依存）' },
+      startpos: { type: 'string', description: '開始位置（1始まり）' },
+    },
+    required: [],
+  };
+
+  return {
+    name: AFFRC_TOOL_NAME,
+    description,
+    inputSchema,
+    async execute(args) {
+      const params = normalizeAffrcArgs(args);
+      fillAffrcForm(params);
+      const result = await runAffrcSearch(params);
+      const agentReturn = summarizeAffrcForAgent(result, params);
       showDebug(args, agentReturn);
       return {
         content: [
@@ -780,6 +1152,25 @@ function buildClassTool() {
 
       const usedCodes = orderedCodes.slice(0, maxCodes);
       const suggestedCategoryParam = usedCodes.join(' ');
+      // ALIS WebOPAC の cls は **単一値のみ受け付ける**（API 仕様策定者からの確認、2026-05-15）。
+      // CiNii Books とは異なり半角スペース区切り OR は使えないため、最先頭のコードを単独で渡す。
+      // 複数コードを試したい場合は AI 側でループして cls をそれぞれ呼び直す前提。
+      const suggestedAffrcClsFirst = usedCodes[0] || '';
+
+      const suggestedCalls = usedCodes.length > 0 ? [
+        {
+          tool: TOOL_NAME,
+          args: { resourceType: 'books', category: suggestedCategoryParam },
+          note: 'CiNii Books は category への半角スペース区切り OR を受け付ける（実機確認済）。',
+        },
+        {
+          tool: AFFRC_TOOL_NAME,
+          args: { cls: suggestedAffrcClsFirst },
+          note:
+            'ALIS WebOPAC の cls は単一値のみ。複数コードを試す場合は usedCodes の各値で本ツールを' +
+            `繰り返し呼び出す。usedCodes 全体: [${usedCodes.map((c) => `"${c}"`).join(', ')}]`,
+        },
+      ] : [];
 
       const agentReturn = {
         '@context': {
@@ -795,14 +1186,17 @@ function buildClassTool() {
         totalCodes: orderedCodes.length,
         usedCodes,
         suggestedCategoryParam,
+        // 後方互換: 旧クライアント向けに suggestedCall（単数）を残す。CiNii ルートのみ。
         suggestedCall: usedCodes.length > 0
           ? { tool: TOOL_NAME, args: { resourceType: 'books', category: suggestedCategoryParam } }
           : null,
+        // 推奨: 複数経路（CiNii Books + AFFRC OPAC）を提示
+        suggestedCalls,
         suggestion: usedCodes.length > 0
-          ? `これらの分類記号 (${usedCodes.length} 件) を ${TOOL_NAME} に ` +
-            `{ resourceType:"books", category:"${suggestedCategoryParam}" } として渡すと、` +
-            'CiNii Books で同分類の書籍を OR 検索できる。' +
-            '件名標目の語そのものより、書誌の分類体系から関連資料を網羅的に拾える。'
+          ? `これらの分類記号 (${usedCodes.length} 件) を以下のいずれか・両方に渡すと、書誌分類体系から関連資料を網羅的に拾える。` +
+            ` (1) ${TOOL_NAME}: { resourceType:"books", category:"${suggestedCategoryParam}" } で CiNii Books を OR 検索（半角スペース区切り）。` +
+            ` (2) ${AFFRC_TOOL_NAME}: { cls:"${suggestedAffrcClsFirst}" } で ALIS WebOPAC を検索（cls は単一値のみ。他コードを試すなら本ツールを順次呼び直す）。` +
+            '件名標目の語そのものより、分類体系経由の方が関連書誌をまとめて拾える。'
           : '該当件名標目に skos:relatedMatch（NDC/NDLC）が見つからなかった。term を別語で試すか ' +
             `${VOCAB_TOOL_NAME} で別名展開を先に試すと良い。`,
       };
@@ -844,10 +1238,13 @@ function registerWebMCPTool() {
 
   if (reg.kind === 'provideContext') {
     // 旧仕様は 1 回の呼び出しでまとめて渡す
-    reg.mc.provideContext({ tools: [buildTool(), buildVocabTool(), buildClassTool()] });
+    reg.mc.provideContext({
+      tools: [buildTool(), buildAffrcTool(), buildVocabTool(), buildClassTool()],
+    });
     return;
   }
   tryRegisterTool(reg, buildTool());
+  tryRegisterTool(reg, buildAffrcTool());
   tryRegisterTool(reg, buildVocabTool());
   tryRegisterTool(reg, buildClassTool());
 }
@@ -907,6 +1304,32 @@ function wireClassSettings() {
   el.addEventListener('change', () => setClassPref(el.checked));
 }
 
+function wireAffrcProxySettings() {
+  const input = $('#affrcProxyInput');
+  const saveBtn = $('#affrcProxySave');
+  const clearBtn = $('#affrcProxyClear');
+  if (!input || !saveBtn) return;
+
+  input.value = getAffrcProxyUrl();
+
+  saveBtn.addEventListener('click', () => {
+    const ok = setAffrcProxyUrl(input.value);
+    if (ok) {
+      renderAffrcStatus('ALIS WebOPAC プロキシ URL を保存しました。', 'info');
+    } else {
+      renderAffrcStatus('ALIS WebOPAC プロキシ URL の保存に失敗しました。', 'error');
+    }
+  });
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      setAffrcProxyUrl('');
+      input.value = getAffrcProxyUrl();
+      renderAffrcStatus('ALIS WebOPAC プロキシ URL の上書きを削除しました（既定のプロキシに戻ります）。', 'info');
+    });
+  }
+}
+
 // ---------- 起動 ----------
 function init() {
   form.addEventListener('submit', (e) => {
@@ -922,9 +1345,25 @@ function init() {
     });
   }
 
+  if (affrcForm) {
+    affrcForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      runAffrcSearch(getAffrcFormParams(affrcForm));
+    });
+    const affrcResetStart = $('#affrcResetStart');
+    if (affrcResetStart) {
+      affrcResetStart.addEventListener('click', () => {
+        const sp = affrcFormEl('startpos');
+        if (sp) sp.value = '1';
+        runAffrcSearch(getAffrcFormParams(affrcForm));
+      });
+    }
+  }
+
   wireAppIdSettings();
   wireVocabSettings();
   wireClassSettings();
+  wireAffrcProxySettings();
   detectWebMCP();
   try {
     registerWebMCPTool();

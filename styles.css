@@ -369,9 +369,31 @@ button.primary:hover:not(:disabled) {
 
 /* ---------- 結果カードの追加メタ（imperative.html） ---------- */
 .result-subjects,
-.result-identifiers {
+.result-identifiers,
+.result-classification,
+.result-seealso {
   margin-top: 3px;
   font-size: 0.82rem;
   color: var(--fg-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+/* ---------- AFFRC セクション（imperative.html） ---------- */
+.source-divider {
+  margin: 28px 0 18px;
+  border: none;
+  border-top: 1px dashed var(--border);
+}
+.form-section-title {
+  margin: 16px 0 4px;
+  font-size: 1.15rem;
+}
+.form-section-note {
+  margin: 0 0 8px;
+  font-size: 0.88rem;
+  color: var(--fg-muted);
+}
+.source-section[data-source="affrc"] {
+  border-left-color: var(--jairo-color);
 }

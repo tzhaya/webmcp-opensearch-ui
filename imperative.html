@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CiNii Research WebMCP デモ（命令的API + JSON-LD 整備版）</title>
+  <title>CiNii Research / ALIS WebOPAC WebMCP デモ：命令的APIを使用したAIエージェントによる検索</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="page-header">
-    <h1>CiNii Research WebMCP デモ（命令的API + JSON-LD 整備版）</h1>
+    <h1>CiNii Research / ALIS WebOPAC WebMCP デモ：命令的APIを使用したAIエージェントによる検索</h1>
+    <p><strong>2026-05-15</strong> 農林水産関係試験研究機関総合目録（ALIS WebOPAC）検索を追加しました。</p>
     <p><strong>2026-05-14</strong> Web NDL Authoritiesを利用して、分類記号をレコメンドしての検索機能を追加しました。</p>
     <p><strong>2026-05-13</strong> 統制語彙による検索語の自動展開機能を追加しました。</p>
     </p><p class="subtitle">
@@ -161,6 +162,108 @@
     <div id="resultsHeader"></div>
     <div id="results"></div>
     <nav id="pagination" class="pagination" aria-label="ページ"></nav>
+
+    <hr class="source-divider" />
+
+    <h2 class="form-section-title">農林水産関係試験研究機関総合目録（ALIS WebOPAC・dcndl）</h2>
+    <p class="form-section-note">
+      ALIS WebOPAC は農林水産研究情報総合センターが提供する農林水産省が所管する試験研究機関・国立研究開発法人図書館の蔵書統合目録です。本フォームはOpenSearch APIでの検索により、DCNDL形式での返戻結果を利用（<code>format=dcndl</code> 固定）し、著者典拠 URI / 読み / NDC 分類記号 URI / CiNii NCID への
+      <code>rdfs:seeAlso</code> など、書誌セマンティクスを保持した形で結果を表示します。
+      WebMCP ツール名は <code>searchAffrcOpac</code>。
+    </p>
+
+    <form id="affrcSearchForm">
+      <div class="form-grid">
+        <label class="field">
+          <span class="field-label">フリーワード (keywd)</span>
+          <input type="text" name="keywd"
+            placeholder="本 API は q ではなく keywd を使用" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">タイトル</span>
+          <input type="text" name="title" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">著者 (auth)</span>
+          <input type="text" name="auth" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">出版者 (pub)</span>
+          <input type="text" name="pub" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">出版年 (year)</span>
+          <input type="text" name="year"
+            placeholder="例: 2020"
+            inputmode="numeric" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">ISBN/ISSN (isbnsn)</span>
+          <input type="text" name="isbnsn" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">NCID (ncid)</span>
+          <input type="text" name="ncid"
+            placeholder="CiNii Books の書誌 ID" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">分類記号 (cls)</span>
+          <input type="text" name="cls"
+            placeholder="NDC/NDLC コード（単一値のみ）" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">件名 (sh)</span>
+          <input type="text" name="sh" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">出版国 (cntry)</span>
+          <input type="text" name="cntry"
+            placeholder="ISO 国コード（例: jp, us）" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">言語 (lang)</span>
+          <input type="text" name="lang"
+            placeholder="例: jpn, eng" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">ソート (sortkey)</span>
+          <input type="text" name="sortkey"
+            placeholder="API 仕様書未記載・未指定推奨" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">1ページの件数 (listcnt)</span>
+          <input type="number" name="listcnt" min="1" max="100" value="20" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">開始位置 (startpos)</span>
+          <input type="number" name="startpos" min="1" max="10000" value="1" />
+        </label>
+      </div>
+
+      <div class="form-actions">
+        <button type="submit" class="primary">ALIS WebOPAC を検索</button>
+        <button type="button" id="affrcResetStart">最初から</button>
+      </div>
+    </form>
+
+    <div id="affrcStatus" class="status" data-kind=""></div>
+
+    <div id="affrcResultsHeader"></div>
+    <div id="affrcResults"></div>
+    <nav id="affrcPagination" class="pagination" aria-label="ALIS WebOPAC ページ"></nav>
   </main>
 
   <footer class="page-footer">
@@ -189,6 +292,25 @@
       <div class="appid-row">
         <label><input type="checkbox" id="vocabNdla" /> Web NDL Authorities (NDLSH 件名標目)</label>
         <label><input type="checkbox" id="vocabAgrovoc" /> AGROVOC (FAO 多言語農業シソーラス)</label>
+      </div>
+    </details>
+
+    <details class="appid-config" id="affrcProxyConfig">
+      <summary>ALIS WebOPAC プロキシ URL を設定する（CORS 回避用・端末内に保存）</summary>
+      <p>
+        ALIS WebOPAC (<code>library.affrc.go.jp</code>) は CORS を許可していないため、
+        ブラウザから直接 <code>searchAffrcOpac</code> を呼び出すとブロックされます。そのため
+        <a href="https://github.com/tzhaya/jc-opensearch-client" target="_blank" rel="noopener">jc-opensearch-client</a>
+        の Cloudflare Worker を ALIS WebOPAC 対応に拡張したプロキシ経由で叩きます。
+        既定で動作するプロキシ URL があらかじめ設定されています。別のプロキシを使う場合のみ上書きしてください
+        （<code>localStorage</code> にのみ保存）。
+        <strong>上流の AFFRC 側が国内向けに制限されているため、国外からは利用できません。</strong>
+      </p>
+      <div class="appid-row">
+        <input type="text" id="affrcProxyInput"
+          placeholder="https://your-worker.your-subdomain.workers.dev" />
+        <button type="button" id="affrcProxySave">保存</button>
+        <button type="button" id="affrcProxyClear">既定に戻す</button>
       </div>
     </details>
 
